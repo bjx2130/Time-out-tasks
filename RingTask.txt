@@ -1,0 +1,348 @@
+package timer;
+
+import timer.task.RingQueue;
+import timer.task.impl.HashMapSoltQueue;
+import timer.task.impl.HashSetSoltQueue;
+
+public class RingTaskFactory {
+	
+	private static RingQueue HashMapSoltInstance = null;
+	private static RingQueue HashSetSoltInstance = null;
+	
+	public static RingQueue getMapSoltInstance() {
+		if(HashMapSoltInstance!=null)
+			return HashMapSoltInstance;
+		HashMapSoltInstance=new HashMapSoltQueue(60);
+		return HashMapSoltInstance;
+	}
+	
+	public static RingQueue getSetSoltInstance() {
+		if(HashSetSoltInstance!=null)
+			return HashSetSoltInstance;
+		HashSetSoltInstance=new HashSetSoltQueue(60);
+		return HashSetSoltInstance;
+	}
+	
+
+}
+>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
+
+package timer.task;
+
+public abstract class Task implements Runnable{
+	
+	int idxSolt = 0;
+	long maxActive = 0;
+	long circleNumber=0;
+	
+	public abstract void initMaxActive();
+	
+	/**
+	 * 子类可以复写此方法，定义每一个任务的[唯一ID]
+	 * @return
+	 */
+	public Object getTaskKey(){
+		return this;
+	};
+	
+	/**
+	 * 子类可以复写此方法，标签[标示任务的类型]
+	 * @return
+	 */
+	public abstract String getTasklabel();
+	
+	
+	public boolean hasNextCircleNumber(){
+		this.setCircleNumber(circleNumber-1);
+		return circleNumber<0;
+	}
+	
+	
+	public long getCircleNumber() {
+		return circleNumber;
+	}
+
+
+	public void setCircleNumber(long circleNumber) {
+		this.circleNumber = circleNumber;
+	}
+
+
+	public long getMaxActive() {
+		return maxActive;
+	}
+
+
+	public void setMaxActive(long maxActive) {
+		this.maxActive = maxActive;
+	}
+
+	
+	public int getIdxSolt() {
+		return idxSolt;
+	}
+
+
+	public void setIdxSolt(int idxSolt) {
+		this.idxSolt = idxSolt;
+	}
+
+
+
+
+
+}
+
+
+
+>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
+package timer.task;
+
+/**
+ * 队列控制接口
+ * @author bWX535804
+ *
+ */
+public interface RingQueue{
+	
+	public boolean add(Task task);
+	
+	public boolean remove(Task obj);
+	
+	/**
+	 * 
+	 * @param TaskKey Task.getTaskKey() 是 Task_Id [默认是Task对象self]
+	 * @return true 	移除成功
+	 * 		   false	移除失败
+	 */
+	public boolean removeByKey(Object TaskKey);
+	
+	/**
+	 * 将队列指针移动到下一格,
+	 * 			if(Task.idxSolt=当前指针位置 && circleNumber==0 )
+	 * 					就执行当前任务，并且将任务从队列中移除
+	 */
+	public void poll();
+	
+}
+
+
+>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
+
+package timer.task;
+
+import java.util.HashMap;
+import java.util.Iterator;
+import java.util.Map;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+
+/**
+ * 环形队列抽象类，
+ * 		1.用于维护环形队列相关信息
+ * 		2.控制任务在环形队列中的索引
+ * @author bWX535804
+ *
+ */
+public abstract class AbstractRingQueue implements RingQueue {
+	
+	/**
+	 * 用于执行Task任务的线程池
+	 */
+	private ExecutorService fixedThreadPool = Executors.newFixedThreadPool(10);
+	
+	/**
+	 * 当前指针的位置,poll()方法调用一次 cursor+1
+	 */
+	private int cursor = 0;
+	
+	
+	/**
+	 * 环形队列的长度
+	 */
+	public int queneLength=60;
+	
+	
+	/**
+	 * 用于维护 task 任务的  key[task.getTaskKey() 返回 唯一ID]->IndexSolt[task 所在队列中的索引]
+	 */
+	public Map<Object,Integer> keyToIndexSoltMap = new HashMap<>();
+	
+	
+
+	
+	
+	/**
+	 * 添加任务到环形队列中
+	 * 		1.计算 Task 任务在环形队列中存活的圈数 circleNumber
+	 * 		2.计算 Task 任务在环形队列中所在的索引 IndexSolt
+	 * 		3.维护 Task TaskKey 和 IndexSolt 关系
+	 */
+	@Override
+	public synchronized boolean add(Task task) {
+		task.initMaxActive();
+		if(task.getMaxActive()<0){
+			System.out.println("添加任务失败:");
+			return false;
+		}
+		long circleNumber=(task.getMaxActive())/queneLength;
+		task.setCircleNumber(circleNumber);
+		long IndexSolt =  ((task.getMaxActive()+cursor)%queneLength);
+		task.setIdxSolt((int)IndexSolt);
+		keyToIndexSoltMap.put(task.getTaskKey(), task.getIdxSolt());
+		return this.addEl(task);
+	}
+	
+	public abstract boolean addEl(Task task);
+	
+	
+	/**
+	 * 移除任务从环形队列中
+	 * 		1.删除 Task TaskKey 和 IndexSolt 关系
+	 */
+	@Override
+	public synchronized boolean remove(Task task) {
+	   Object taskKey = task.getTaskKey();
+	   Integer soltIdx = keyToIndexSoltMap.remove(taskKey);
+		if(soltIdx!=null){
+			return this.removeEl(soltIdx,taskKey);
+		}
+		return false;
+	}
+	
+	
+	public abstract boolean removeEl(int soltIdx,Object el);
+	
+	
+	@Override
+	public void poll() {
+		System.out.println("poll:"+cursor);
+		Iterator<Task> iter = this.iteratorSolt(cursor);
+		Task task = null;
+		while (iter.hasNext()) {
+			task = iter.next();
+			if (task.hasNextCircleNumber()) {
+				iter.remove();
+				fixedThreadPool.execute(task);
+			}
+		}
+		cursor++;
+		if (cursor % this.queneLength == 0)
+			cursor = 0;
+	}
+	
+	public abstract Iterator<Task> iteratorSolt(int cursor);
+
+	
+}
+
+
+>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
+
+
+package timer.task.impl;
+
+import java.util.HashMap;
+import java.util.Iterator;
+import java.util.Map;
+
+import timer.task.AbstractRingQueue;
+import timer.task.Task;
+
+
+/**
+ *  SoltNode 的  HashMap 环形队列实现
+ *  支持 removeByKey(taskKey) 删除任务
+ * @author bWX535804
+ *
+ */
+public class HashMapSoltQueue extends AbstractRingQueue {
+	
+	Map<Object,Task>[] soltNodeArray = new HashMap[queneLength];
+	
+	public HashMapSoltQueue(int queneLength){
+		super.queneLength = queneLength;
+		for (int i = 0; i < soltNodeArray.length; i++) {
+			soltNodeArray[i]=new HashMap<>();
+		}
+	}
+	
+	@Override
+	public Iterator<Task> iteratorSolt(int currentIndex) {
+		return soltNodeArray[currentIndex].values().iterator();
+	}
+
+	@Override
+	public boolean addEl(Task task) {
+		return soltNodeArray[task.getIdxSolt()].put(task.getTaskKey(), task)==null;
+	}
+
+	@Override
+	public boolean removeEl(int soltIdx, Object el) {
+		return soltNodeArray[soltIdx].remove(el)!=null;
+	}
+	
+	@Override
+	public boolean removeByKey(Object taskKey) {
+		Integer soltIdx = super.keyToIndexSoltMap.remove(taskKey);
+		if(soltIdx!=null){
+			return this.removeEl(soltIdx,taskKey);
+		}
+		return false;
+	}
+	
+	
+}
+
+
+>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>
+package timer.task.impl;
+
+import java.util.HashSet;
+import java.util.Iterator;
+import java.util.Set;
+
+import timer.task.AbstractRingQueue;
+import timer.task.Task;
+
+/**
+ *  SoltNode 的  HashSet 环形队列实现
+ *  [不]支持 removeByKey(taskKey) 删除任务
+ *  
+ * @author bWX535804
+ *
+ */
+public class HashSetSoltQueue extends AbstractRingQueue{
+	
+	Set<Task>[] soltNodeArray = new HashSet[queneLength];
+	
+	public HashSetSoltQueue(int queneLength){
+		super.queneLength = queneLength;
+		for (int i = 0; i < soltNodeArray.length; i++) {
+			soltNodeArray[i]=new HashSet<>();
+		}
+	}
+	
+	@Override
+	public Iterator<Task> iteratorSolt(int currentIndex) {
+		return soltNodeArray[currentIndex].iterator();
+	}
+
+	@Override
+	public boolean addEl(Task task) {
+		return soltNodeArray[task.getIdxSolt()].add(task);
+	}
+
+	@Override
+	public boolean removeEl(int soltIdx, Object el) {
+		Task task = (Task)el;
+		return soltNodeArray[task.getIdxSolt()].remove(task);
+	}
+	
+	@Override
+	public boolean removeByKey(Object taskKey) {
+		throw new RuntimeException("HashSetSoltNode 不支持根据 taskKey 删除任务");
+	}
+
+}
+
